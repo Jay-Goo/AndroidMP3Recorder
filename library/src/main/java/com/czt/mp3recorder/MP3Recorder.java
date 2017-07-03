@@ -30,9 +30,9 @@ public class MP3Recorder {
 	 */
 	private static final int DEFAULT_LAME_IN_CHANNEL = 1;
 	/**
-	 *  Encoded bit rate. MP3 file will be encoded with bit rate 32kbps 
+	 *  default Encoded bit rate. MP3 file will be encoded with bit rate 128kbps
 	 */ 
-	private static final int DEFAULT_LAME_MP3_BIT_RATE = 32;
+	private static int DEFAULT_LAME_MP3_BIT_RATE = 128;
 	
 	//==================================================================
 	
@@ -61,7 +61,7 @@ public class MP3Recorder {
 	 * 
 	 * @throws IOException  initAudioRecorder throws
 	 */
-	public void start() throws IOException {
+	public void start() throws IOException{
 		if (mIsRecording) {
 			return;
 		}
@@ -71,22 +71,27 @@ public class MP3Recorder {
 		new Thread() {
 			@Override
 			public void run() {
-				//设置线程权限
-				android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-				while (mIsRecording) {
-					int readSize = mAudioRecord.read(mPCMBuffer, 0, mBufferSize);
-					if (readSize > 0) {
-						mEncodeThread.addTask(mPCMBuffer, readSize);
-						calculateRealVolume(mPCMBuffer, readSize);
+				try {
+					//设置线程权限
+					android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+					while (mIsRecording) {
+						int readSize = mAudioRecord.read(mPCMBuffer, 0, mBufferSize);
+						if (readSize > 0) {
+							mEncodeThread.addTask(mPCMBuffer, readSize);
+							calculateRealVolume(mPCMBuffer, readSize);
+						}
 					}
+					// release and finalize audioRecord
+					mAudioRecord.stop();
+					mAudioRecord.release();
+					mAudioRecord = null;
+					// stop the encoding thread and try to wait
+					// until the thread finishes its job
+					mEncodeThread.sendStopMessage();
+				}catch (NullPointerException e){
+					e.printStackTrace();
 				}
-				// release and finalize audioRecord
-				mAudioRecord.stop();
-				mAudioRecord.release();
-				mAudioRecord = null;
-				// stop the encoding thread and try to wait
-				// until the thread finishes its job
-				mEncodeThread.sendStopMessage();
+
 			}
 			/**
 			 * 此计算方法来自samsung开发范例
@@ -179,5 +184,9 @@ public class MP3Recorder {
 		mEncodeThread.start();
 		mAudioRecord.setRecordPositionUpdateListener(mEncodeThread, mEncodeThread.getHandler());
 		mAudioRecord.setPositionNotificationPeriod(FRAME_COUNT);
+	}
+
+	public void setDefaultLameMp3BitRate(int rate){
+		DEFAULT_LAME_MP3_BIT_RATE = rate;
 	}
 }
