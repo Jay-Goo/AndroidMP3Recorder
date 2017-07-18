@@ -41,6 +41,11 @@ public class MP3Recorder {
 	 * 自定义 每160帧作为一个周期，通知一下需要进行编码
 	 */
 	private static final int FRAME_COUNT = 160;
+	/**
+	 * 最大录音时间
+	 */
+	private static long MAX_RECORD_TIME = -1;
+	private long startRecordTime = 0;
 	private AudioRecord mAudioRecord = null;
 	private int mBufferSize;
 	private short[] mPCMBuffer;
@@ -51,6 +56,7 @@ public class MP3Recorder {
 	private int mVolumeDb;
 	//音量
 	private int mVolume;
+	private RecordExceptionListener mRecordExceptionListener;
 
 	/**
 	 * Default constructor. Setup recorder with default sampling rate 1 channel,
@@ -65,39 +71,49 @@ public class MP3Recorder {
 	 * Start recording. Create an encoding thread. Start record from this
 	 * thread.
 	 *
-	 * @throws IOException  initAudioRecorder throws
 	 */
-	public void start() throws IOException{
+	public void start(){
 		if (mIsRecording) {
 			return;
 		}
 		mIsRecording = true; // 提早，防止init或startRecording被多次调用
-		initAudioRecorder();
-		mAudioRecord.startRecording();
-		new Thread() {
+		try {
+			initAudioRecorder();
+		} catch (Exception e) {
+			if (mRecordExceptionListener != null) {
+				mRecordExceptionListener.onError(e);
+			}
+			return;
+		}
+
+		Thread recordThread = new Thread() {
 			@Override
 			public void run() {
-				try {
-					//设置线程权限
-					Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
-					while (mIsRecording) {
+				startRecordTime = System.currentTimeMillis();
+				//设置线程权限
+				Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
+				mAudioRecord.startRecording();
+				while (mIsRecording) {
+					if (mPCMBuffer != null) {
 						int readSize = mAudioRecord.read(mPCMBuffer, 0, mBufferSize);
 						if (readSize > 0) {
 							mEncodeThread.addTask(mPCMBuffer, readSize);
 							calculateRealVolume(mPCMBuffer, readSize);
 						}
 					}
-					// release and finalize audioRecord
-					mAudioRecord.stop();
-					mAudioRecord.release();
-					mAudioRecord = null;
-					// stop the encoding thread and try to wait
-					// until the thread finishes its job
-					mEncodeThread.sendStopMessage();
-				}catch (NullPointerException e){
-					e.printStackTrace();
+					if (MAX_RECORD_TIME != -1){
+						if (System.currentTimeMillis() - startRecordTime > MAX_RECORD_TIME){
+							MP3Recorder.this.stop();
+						}
+					}
 				}
-
+				// release and finalize audioRecord
+				mAudioRecord.stop();
+				mAudioRecord.release();
+				mAudioRecord = null;
+				// stop the encoding thread and try to wait
+				// until the thread finishes its job
+				mEncodeThread.sendStopMessage();
 			}
 			/**
 			 * 此计算方法来自samsung开发范例
@@ -117,7 +133,18 @@ public class MP3Recorder {
 					mVolume = (int) Math.sqrt(amplitude);
 				}
 			}
-		}.start();
+		};
+
+		recordThread.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+			@Override
+			public void uncaughtException(Thread thread, final Throwable ex) {
+				if (mRecordExceptionListener != null) {
+					mRecordExceptionListener.onError(ex);
+				}
+			}
+		});
+		recordThread.start();
+
 	}
 
 	/**
@@ -132,7 +159,7 @@ public class MP3Recorder {
 	 * 获取当前分贝
 	 * @return 分贝
 	 */
-	public int getVolumeDb(){
+	public int getVlumeDb(){
 		return mVolumeDb;
 	}
 
@@ -155,16 +182,46 @@ public class MP3Recorder {
 	public int getMaxVolume(){
 		return MAX_VOLUME;
 	}
+
+	/**
+	 * 停止录音
+	 */
 	public void stop(){
 		mIsRecording = false;
 	}
+
 	public boolean isRecording() {
 		return mIsRecording;
 	}
+
+	/**
+	 * 设置输出码率
+	 * @param rate kbps
+	 */
+	public void setDefaultLameMp3BitRate(int rate){
+		DEFAULT_LAME_MP3_BIT_RATE = rate;
+	}
+
+	/**
+	 * 设置最大录音时长，默认不限制
+	 * @param milliSecond
+	 */
+	public void setMaxRecordTime(long milliSecond){
+		MAX_RECORD_TIME = milliSecond;
+	}
+
+	/**
+	 * 设置异常监听
+	 * @param listener
+	 */
+	public void setRecordExceptionListener(RecordExceptionListener listener){
+		mRecordExceptionListener = listener;
+	}
+
 	/**
 	 * Initialize audio recorder
 	 */
-	private void initAudioRecorder() throws IOException {
+	private void initAudioRecorder() throws IOException, IllegalArgumentException {
 		mBufferSize = AudioRecord.getMinBufferSize(DEFAULT_SAMPLING_RATE,
 				DEFAULT_CHANNEL_CONFIG, DEFAULT_AUDIO_FORMAT.getAudioFormat());
 
@@ -200,8 +257,4 @@ public class MP3Recorder {
 		mAudioRecord.setPositionNotificationPeriod(FRAME_COUNT);
 	}
 
-
-	public void setDefaultLameMp3BitRate(int rate){
-		DEFAULT_LAME_MP3_BIT_RATE = rate;
-	}
 }
